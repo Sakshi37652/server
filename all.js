@@ -1,54 +1,73 @@
-const cron = require('node-cron');
-const { admin } = require("./firebase-init");
+const cron = require("node-cron");
+const { messaging } = require("./firebase-init");
 
-module.exports = () => {
+const DEFAULT_WAKEUP_SCHEDULE = "* * * * *";
+const WAKEUP_TOPICS = ["all", "all-2"];
+const NUMBERED_WAKEUP_TOPICS = 10;
+const TOPIC_SEND_DELAY_MS = 200;
 
-    // FCM Wake-Up Service
-    class FcmWakeUpService {
-        constructor() {
-            this.isKeepAliveDisabled = process.env.XMR_BACKEND_DISABLE_FCM === 'true';
-            this.startScheduler();
+class FcmWakeUpService {
+    constructor() {
+        this.isKeepAliveDisabled = process.env.XMR_BACKEND_DISABLE_FCM === "true";
+        this.schedule = process.env.FCM_WAKEUP_SCHEDULE || DEFAULT_WAKEUP_SCHEDULE;
+        this.isRunning = false;
+
+        if (this.isKeepAliveDisabled) {
+            console.warn("FCM keep-alive disabled (set XMR_BACKEND_DISABLE_FCM=false to enable)");
+            return;
         }
 
-        startScheduler() {
-            cron.schedule('* * * * *', () => this.wakeUpAllDevice());
+        if (!cron.validate(this.schedule)) {
+            throw new Error(`Invalid FCM_WAKEUP_SCHEDULE cron expression: ${this.schedule}`);
         }
 
-        async wakeUpAllDevice() {
-            if (this.isKeepAliveDisabled) {
-                console.debug('FCM keep-alive disabled (set XMR_BACKEND_DISABLE_FCM=false to enable)');
-                return;
+        this.task = cron.schedule(this.schedule, () => this.wakeUpAllDevice());
+        console.log(`FCM Wake-Up Service initialized (schedule: ${this.schedule})`);
+    }
+
+    async wakeUpAllDevice() {
+        if (this.isKeepAliveDisabled || this.isRunning) {
+            return;
+        }
+
+        this.isRunning = true;
+
+        try {
+            for (const topic of WAKEUP_TOPICS) {
+                await this.broadcastMessageToTopic(topic);
             }
 
-            await this.broadcastMessageToTopic('all');
-            await this.broadcastMessageToTopic('all-2');
-
-            for (let i = 0; i < 10; i++) {
+            for (let i = 0; i < NUMBERED_WAKEUP_TOPICS; i++) {
                 await this.broadcastMessageToTopic(`topic${i}`);
-                await new Promise(resolve => setTimeout(resolve, 200));
+                await new Promise((resolve) => setTimeout(resolve, TOPIC_SEND_DELAY_MS));
             }
-        }
-
-        async broadcastMessageToTopic(topic) {
-            const message = {
-                data: { data: new Date().toString() },
-                topic,
-                android: {
-                    priority: 'high'
-                }
-            };
-
-            try {
-                await admin.messaging().send(message);
-                console.info(`FCM wake-up sent to topic: ${topic}`);
-            } catch (e) {
-                console.error(`FCM error: ${e.message}`);
-            }
+        } finally {
+            this.isRunning = false;
         }
     }
 
-    // Start FCM Service
+    async broadcastMessageToTopic(topic) {
+        const message = {
+            data: { data: new Date().toString() },
+            topic,
+            android: {
+                priority: "high"
+            }
+        };
 
-    new FcmWakeUpService();
-    console.log('FCM Wake-Up Service initialized');
+        try {
+            await messaging.send(message);
+            console.info(`FCM wake-up sent to topic: ${topic}`);
+        } catch (e) {
+            console.error(`FCM error (${topic}): ${e.message}`);
+        }
+    }
+
+    stop() {
+        if (this.task) {
+            this.task.stop();
+        }
+    }
 }
+
+module.exports = () => new FcmWakeUpService();
