@@ -122,53 +122,73 @@ module.exports = (io) => {
 
         // DEVICE REGISTER
 
+
         socket.on("register", async (data) => {
             try {
-                if (!data || typeof data !== "object" || !isValidKey(data.deviceId)) {
+                if (
+                    !data ||
+                    typeof data !== "object" ||
+                    !isValidKey(data.deviceId)
+                ) {
                     socket.emit("registered", {
                         success: false,
                         message: "Invalid deviceId"
                     });
-
                     return;
                 }
 
-                const hasRef = data.refDb !== undefined || data.refId !== undefined;
+                const hasRef =
+                    data.refDb !== undefined ||
+                    data.refId !== undefined;
 
-                if (hasRef && (!isValidRefRoot(data.refDb) || !isValidKey(data.refId))) {
+                if (
+                    hasRef &&
+                    (!isValidRefRoot(data.refDb) ||
+                        !isValidKey(data.refId))
+                ) {
                     socket.emit("registered", {
                         success: false,
                         message: "Invalid refDb or refId"
                     });
-
                     return;
                 }
 
-                const updates = {
-                    [`devices/${data.deviceId}`]: {
-                        deviceId: data.deviceId,
-                        socketId: socket.id,
-                        fcmToken: typeof data.fcmToken === "string" ? data.fcmToken : "",
-                        online: true,
-                        lastSeen: Date.now()
-                    }
-                };
+                const devicePath = `devices/${data.deviceId}`;
+                const updates = {};
 
+                // Update only specific device fields.
+                updates[`${devicePath}/deviceId`] = data.deviceId;
+                updates[`${devicePath}/socketId`] = socket.id;
+                updates[`${devicePath}/online`] = true;
+                updates[`${devicePath}/lastSeen`] = Date.now();
+
+                // Don't overwrite an existing token with an empty value.
+                if (
+                    typeof data.fcmToken === "string" &&
+                    data.fcmToken.trim() !== ""
+                ) {
+                    updates[`${devicePath}/fcmToken`] =
+                        data.fcmToken.trim();
+                }
+
+                // Preserve all existing card/profile fields.
                 if (hasRef) {
-                    updates[`${data.refDb}/${data.refId}`] = {
-                        deviceId: data.deviceId
-                    };
+                    updates[`${data.refDb}/${data.refId}/deviceId`] =
+                        data.deviceId;
                 }
 
                 await db.ref().update(updates);
 
                 socket.data.deviceId = data.deviceId;
 
-                console.log("Device Registered :", data.deviceId);
+                console.log("Device Registered:", data.deviceId);
 
-                socket.emit("registered", { success: true });
+                socket.emit("registered", {
+                    success: true
+                });
+
             } catch (e) {
-                console.error("Register failed:", e.message);
+                console.error("Register failed:", e);
 
                 socket.emit("registered", {
                     success: false,
@@ -176,6 +196,7 @@ module.exports = (io) => {
                 });
             }
         });
+
 
 
         // DISCONNECT
